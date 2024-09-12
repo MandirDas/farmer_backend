@@ -577,8 +577,8 @@ def predict():
             "name": name,
             "disease": result.get("disease", "Unknown"),
             "confidence": float(result.get("confidence", 0.0)),
-            "given_symptoms": symptoms,
-            "top_symptoms": other_symptoms,
+            "symptoms": symptoms,
+            "other_possible_symptoms": other_symptoms,
             "potential_causes": causes,
             "treatment_plan": treatment_plan
         }
