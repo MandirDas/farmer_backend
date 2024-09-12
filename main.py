@@ -674,7 +674,8 @@ def predict_disease_from_symptoms():
 
 # Include all your helper functions here (preprocess_image_tflite, predict_with_tflite, analyze_image_for_disease, etc.)
 
-
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
 # if __name__ == '__main__':
 #     port = int(os.environ.get('PORT', 8000))
 #     app.run(host='0.0.0.0', port=port)
