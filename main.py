@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)
 
-genai.configure(api_key="GEMINI_API_KEY")
+
+api_key = os.getenv('GOOGLE_API_KEY')
+if not api_key:
+    raise ValueError("No API key set for Google Generative AI")
+
+genai.configure(api_key=api_key)
+
+# genai.configure(api_key="GEMINI_API_KEY")
 model = genai.GenerativeModel('gemini-1.5-flash')
 MODEL_PLANT = tf.lite.Interpreter(model_path="models/model_int8_optimized.tflite")
 MODEL_PLANT.allocate_tensors()
