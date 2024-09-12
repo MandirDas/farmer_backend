@@ -1,5 +1,6 @@
 import base64
 import re
+from json import JSONDecodeError
 from typing import Any, Dict, List
 from flask import Flask, json, request, jsonify
 from flask_cors import CORS
@@ -19,10 +20,10 @@ CORS(app)
 
 genai.configure(api_key="GEMINI_API_KEY")
 model = genai.GenerativeModel('gemini-1.5-flash')
-MODEL_PLANT = tf.lite.Interpreter(model_path="models/model_int8_optimized.tflite")
+MODEL_PLANT = tf.lite.Interpreter(model_path="/Users/mandir/SIH/training/model_int8_optimized.tflite")
 MODEL_PLANT.allocate_tensors()
 
-MODEL_ANIMAL = tf.lite.Interpreter(model_path="models/livestock_optimized.tflite")
+MODEL_ANIMAL = tf.lite.Interpreter(model_path="/Users/mandir/SIH/training/livestock_optimized.tflite")
 MODEL_ANIMAL.allocate_tensors()
 # Get input and output tensors
 input_details_plant = MODEL_PLANT.get_input_details()
@@ -51,7 +52,7 @@ CLASS_NAMES_ANIMAL = ['Foot and mouth disease pigs',
  'Glassers disease pigs',
  'Healthy cow',
  'Healthy pigs',
- 'Lumpy skin disease cow',
+ 'Lumpy skin cow',
  'Pdns pigs'
 ]
 
@@ -126,7 +127,7 @@ def generate_symptoms(disease: str, category: str) -> List[str]:
         if len(symptoms) != 5:
             raise ValueError("Incorrect number of symptoms returned")
         return symptoms
-    except json.JSONDecodeError:
+    except JSONDecodeError:
         raise ValueError("Invalid JSON response from Gemini")
     except KeyError:
         raise ValueError("Unexpected JSON structure in Gemini response")
@@ -148,9 +149,66 @@ def generate_treatment(symptoms: List[str],catagory: str) -> str:
     response = model.generate_content(prompt)
     return response.text.strip()
 
-def generate_treatment_plan(disease: str, category: str) -> Dict[str, List[str]]:
+def generate_causes(disease: str, category: str, symptoms: List[str]) -> List[str]:
     prompt = f"""
-    Provide a treatment plan for {disease} in {category}.
+    Given the disease '{disease}' in {category} with the following symptoms: {', '.join(symptoms)},
+    list the top 3 potential causes.
+    Provide your answer as a JSON array of exactly 3 strings, each representing a cause.
+    Example: ["Cause 1", "Cause 2", "Cause 3"]
+    Only provide the JSON array, no other text.
+    """
+    try:
+        response = model.generate_content(prompt)
+        
+        # Check if the response was blocked
+        if not response.candidates or response.candidates[0].finish_reason == "SAFETY":
+            logger.warning("Gemini response was blocked due to safety concerns.")
+            for candidate in response.candidates:
+                for rating in candidate.safety_ratings:
+                    logger.warning(f"Safety rating: {rating.category} - {rating.probability}")
+            return ["Unable to generate causes due to content restrictions", 
+                    "Please consult a professional for accurate information", 
+                    "Safety measures prevented detailed response"]
+
+        # If we have a valid response, process it
+        if response.candidates[0].content.parts:
+            response_text = response.candidates[0].content.parts[0].text
+            json_str = response_text.strip()
+            if json_str.startswith('```json'):
+                json_str = json_str.split('```json')[1]
+            if json_str.endswith('```'):
+                json_str = json_str.rsplit('```', 1)[0]
+            
+            result = json.loads(json_str)
+            
+            if isinstance(result, list) and all(isinstance(item, str) for item in result):
+                return result[:3]  # Return up to 3 causes
+            else:
+                logger.warning(f"Unexpected response format: {result}")
+                return ["Unexpected response format", 
+                        "Please try again or consult a professional", 
+                        "Unable to process the generated causes"]
+        else:
+            logger.warning("Empty response content from Gemini")
+            return ["No causes generated", 
+                    "Please try again or consult a professional", 
+                    "Unable to process the request at this time"]
+        
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON response from Gemini: {response_text}")
+        return ["Invalid response format", 
+                "Please try again or consult a professional", 
+                "Unable to process the generated causes"]
+    except Exception as e:
+        logger.error(f"Error in generate_causes: {str(e)}")
+        logger.error(f"Full response: {response}")
+        return ["Error generating causes", 
+                "Please try again or consult a professional", 
+                f"Technical details: {str(e)}"]
+
+def generate_treatment_plan(disease: str, category: str, symptoms: List[str]) -> Dict[str, List[str]]:
+    prompt = f"""
+    Provide a treatment plan for {disease} in {category} with the following symptoms: {', '.join(symptoms)}.
     Structure your answer as a JSON object with the following keys:
     1. "immediate_actions": List of 2-3 immediate steps to take
     2. "long_term_management": List of 2-3 long-term management strategies
@@ -166,33 +224,62 @@ def generate_treatment_plan(disease: str, category: str) -> Dict[str, List[str]]
     response = model.generate_content(prompt)
     return process_gemini_response(response.text)
 
-def generate_causes(disease: str, category: str) -> List[str]:
+def generate_causes(disease: str, category: str, symptoms: List[str]) -> List[str]:
     prompt = f"""
-    List the top 3 potential causes of {disease} in {category}.
+    Given the disease '{disease}' in {category} with the following symptoms: {', '.join(symptoms)},
+    list the top 3 potential causes.
     Provide your answer as a JSON array of exactly 3 strings, each representing a cause.
     Example: ["Cause 1", "Cause 2", "Cause 3"]
     Only provide the JSON array, no other text.
     """
-    response = model.generate_content(prompt)
-    
     try:
-        json_str = response.text.strip()
-        if json_str.startswith('```json'):
-            json_str = json_str.split('```json')[1]
-        if json_str.endswith('```'):
-            json_str = json_str.rsplit('```', 1)[0]
+        response = model.generate_content(prompt)
         
-        result = json.loads(json_str)
-        
-        if isinstance(result, list) and all(isinstance(item, str) for item in result):
-            return result[:3]  # Return up to 3 causes
+        # Check if the response was blocked
+        if not response.candidates or response.candidates[0].finish_reason == "SAFETY":
+            logger.warning("Gemini response was blocked due to safety concerns.")
+            for candidate in response.candidates:
+                for rating in candidate.safety_ratings:
+                    logger.warning(f"Safety rating: {rating.category} - {rating.probability}")
+            return ["Unable to generate causes due to content restrictions", 
+                    "Please consult a professional for accurate information", 
+                    "Safety measures prevented detailed response"]
+
+        # If we have a valid response, process it
+        if response.candidates[0].content.parts:
+            response_text = response.candidates[0].content.parts[0].text
+            json_str = response_text.strip()
+            if json_str.startswith('```json'):
+                json_str = json_str.split('```json')[1]
+            if json_str.endswith('```'):
+                json_str = json_str.rsplit('```', 1)[0]
+            
+            result = json.loads(json_str)
+            
+            if isinstance(result, list) and all(isinstance(item, str) for item in result):
+                return result[:3]  # Return up to 3 causes
+            else:
+                logger.warning(f"Unexpected response format: {result}")
+                return ["Unexpected response format", 
+                        "Please try again or consult a professional", 
+                        "Unable to process the generated causes"]
         else:
-            raise ValueError("Unexpected response format")
+            logger.warning("Empty response content from Gemini")
+            return ["No causes generated", 
+                    "Please try again or consult a professional", 
+                    "Unable to process the request at this time"]
         
     except json.JSONDecodeError:
-        raise ValueError("Invalid JSON response from Gemini")
+        logger.error(f"Invalid JSON response from Gemini: {response_text}")
+        return ["Invalid response format", 
+                "Please try again or consult a professional", 
+                "Unable to process the generated causes"]
     except Exception as e:
-        raise ValueError(f"Error processing Gemini response: {str(e)}")
+        logger.error(f"Error in generate_causes: {str(e)}")
+        logger.error(f"Full response: {response}")
+        return ["Error generating causes", 
+                "Please try again or consult a professional", 
+                f"Technical details: {str(e)}"]
 
 def parse_treatment(treatment_text: str) -> Dict[str, List[str]]:
     # Remove the "General Treatment Plan:" header
@@ -225,12 +312,12 @@ def process_gemini_response(response_text: str) -> Any:
     
     try:
         return json.loads(json_str)
-    except json.JSONDecodeError as e:
+    except JSONDecodeError as e:
         logger.error(f"JSON decode error: {str(e)}")
         logger.error(f"Problematic JSON string: {json_str}")
         return None  # or return a default value
 
-def analyze_image_for_disease(image_data: bytes, name: str) -> Dict[str, Any]:
+def analyze_image_for_disease(image_data: bytes, name: str, symptoms: List[str]) -> Dict[str, Any]:
     # Convert bytes to PIL Image
     image = Image.open(io.BytesIO(image_data))
     
@@ -253,31 +340,28 @@ def analyze_image_for_disease(image_data: bytes, name: str) -> Dict[str, Any]:
         initial_response = model.generate_content([prompt, {"mime_type": "image/png", "data": img_str}])
         result = process_gemini_response(initial_response.text)
 
-        # Generate symptoms
-        symptoms_prompt = f"List the top 5 most common symptoms of {result['disease']} in {name}. Provide your answer as a JSON array of exactly 5 strings."
-        symptoms_response = model.generate_content(symptoms_prompt)
-        symptoms = process_gemini_response(symptoms_response.text)
-        causes_prompt = f"""
-        List the top 3 potential causes of {result['disease']} in {name}.
-        Provide your answer as a JSON array of exactly 3 strings, each representing a cause.
-        Example: ["Cause 1", "Cause 2", "Cause 3"]
-        Only provide the JSON array, no other text.
+        # Generate other possible symptoms
+        other_symptoms_prompt = f"""
+        Given the disease '{result['disease']}' in {name} with the following symptoms: {', '.join(symptoms)},
+        list 3 other possible symptoms that might occur but are not mentioned.
+        Provide the answer in JSON format with a key 'other_symptoms' and an array of exactly 3 strings.
+        Example format: {{"other_symptoms": ["symptom1", "symptom2", "symptom3"]}}
         """
-        try:
-            causes_response = model.generate_content(causes_prompt)
-            causes = process_gemini_response(causes_response.text)
-            if causes is None:
-                causes = ["Unable to determine causes"]
-        except Exception as e:
-            logger.error(f"Error generating causes: {str(e)}")
-            causes = ["Unable to determine causes"]
+        other_symptoms_response = model.generate_content(other_symptoms_prompt)
+        other_symptoms = process_gemini_response(other_symptoms_response.text)
 
-        treatment_plan = generate_treatment_plan(result['disease'], name)
+        # Generate causes
+        causes = generate_causes(result['disease'], name, symptoms)
+
+        # Generate treatment plan
+        treatment_plan = generate_treatment_plan(result['disease'], name, symptoms)
 
         return {
+            "name": name,
             "disease": result['disease'],
             "confidence": result['confidence'],
             "symptoms": symptoms,
+            "other_possible_symptoms": other_symptoms['other_symptoms'] if isinstance(other_symptoms, dict) else [],
             "potential_causes": causes,
             "treatment_plan": treatment_plan
         }
@@ -294,41 +378,40 @@ def process_gemini_response(response_text: str) -> Any:
     
     try:
         return json.loads(json_str)
-    except json.JSONDecodeError as e:
+    except JSONDecodeError as e:
         logger.error(f"JSON decode error: {str(e)}")
         logger.error(f"Problematic JSON string: {json_str}")
         return None  # or return a default value
 
-def generate_top_symptoms(disease: str, category: str) -> List[str]:
+def generate_top_symptoms(disease: str, category: str, given_symptoms: List[str]) -> List[str]:
     prompt = f"""
-    List the top 5 most common symptoms of {disease} in {category}.
-    Provide your answer as a JSON array of exactly 5 strings, each representing a symptom.
-    Example: ["Symptom 1", "Symptom 2", "Symptom 3", "Symptom 4", "Symptom 5"]
-    Only provide the JSON array, no other text.
+    Given the disease '{disease}' in {category} and the following symptoms: {', '.join(given_symptoms)},
+    list the top 5 most common symptoms for this disease, including those already mentioned if applicable.
+    Provide ONLY the JSON response with a key 'symptoms' and an array of exactly 5 strings.
+    Example format: {{"symptoms": ["symptom1", "symptom2", "symptom3", "symptom4", "symptom5"]}}
     """
-
     response = model.generate_content(prompt)
-    
     try:
-        # Extract the JSON part from the response
-        json_str = response.text.strip()
-        if json_str.startswith('```json'):
-            json_str = json_str.split('```json')[1]
-        if json_str.endswith('```'):
-            json_str = json_str.rsplit('```', 1)[0]
-        
-        result = json.loads(json_str)
-        
-        # Check if the result is a list of strings
-        if isinstance(result, list) and all(isinstance(item, str) for item in result):
-            return result[:5]  # Return up to 5 symptoms
+        # Extract JSON from the response
+        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            symptoms_json = json.loads(json_str)
+            symptoms = symptoms_json.get('symptoms', [])
+            if len(symptoms) != 5:
+                raise ValueError("Incorrect number of symptoms returned")
+            return symptoms
         else:
-            raise ValueError("Unexpected response format")
-        
+            raise ValueError("No JSON found in the response")
     except json.JSONDecodeError:
+        logger.error(f"Invalid JSON response from Gemini: {response.text}")
         raise ValueError("Invalid JSON response from Gemini")
+    except KeyError:
+        logger.error(f"Unexpected JSON structure in Gemini response: {response.text}")
+        raise ValueError("Unexpected JSON structure in Gemini response")
     except Exception as e:
-        raise ValueError(f"Error processing Gemini response: {str(e)}")
+        logger.error(f"Error in generate_top_symptoms: {str(e)}", exc_info=True)
+        raise ValueError(f"Error generating top symptoms: {str(e)}")
     
 def generate_disease_info(disease: str, category: str) -> Dict[str, Any]:
     try:
@@ -419,6 +502,7 @@ def predict():
     try:
         file = request.files['file']
         name = request.form.get('name', '')
+        symptoms = request.form.getlist('symptoms[]',)
         
         # Open the image file
         image = Image.open(file.stream)
@@ -459,42 +543,47 @@ def predict():
         predicted_class = np.argmax(predictions[0])
         class_name = CLASS_NAMES[predicted_class]
         confidence = float(predictions[0][predicted_class])
+        confidence = min(confidence / 10 , 1.0)
 
-        logger.info(f"Prediction: {class_name}, Confidence: {confidence}")
+        logger.info(f"Prediction: {class_name}, Confidence: {confidence}, symptoms: {symptoms}")
+
 
         if confidence < 0.70:
             logger.info(f"Low confidence ({confidence}), using Gemini as fallback")
-            result = analyze_image_for_disease(img_byte_arr, name_lower)
+            result = analyze_image_for_disease(img_byte_arr, name_lower, symptoms)
             logger.info(f"Gemini fallback result: {result}")
+            return jsonify(result)
         else:
+            logger.info(f"High confidence ({confidence}), using TFLite model for {class_name}")
             result = {
                 "disease": class_name,
                 "confidence": confidence
             }
         
-        symptoms = generate_top_symptoms(result["disease"], name)
-        causes = generate_causes(result["disease"], name)
-        treatment_plan = generate_treatment_plan(result["disease"], name)
+        logger.info(f"Prediction: {class_name}, Confidence: {confidence}")
+        
+        other_symptoms = generate_top_symptoms(result["disease"], name, symptoms)
+        causes = generate_causes(result["disease"], name, symptoms)
+        treatment_plan = generate_treatment_plan(result["disease"], name, symptoms)
         
         final_result = {
-           "name": name,
-            "disease": result["disease"],
-            "confidence": result["confidence"],
-            "symptoms": symptoms,
+            "name": name,
+            "disease": result.get("disease", "Unknown"),
+            "confidence": float(result.get("confidence", 0.0)),
+            "given_symptoms": symptoms,
+            "top_symptoms": other_symptoms,
             "potential_causes": causes,
             "treatment_plan": treatment_plan
         }
         
         logger.info(f"Final result: {final_result}")
-        return jsonify(final_result)
+        return jsonify(final_result)    
 
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
     
-# import re
-# import json
-# from flask import request, jsonify
+
 
 @app.route("/predict_disease_from_symptoms", methods=['POST'])
 def predict_disease_from_symptoms():
@@ -587,5 +676,5 @@ def predict_disease_from_symptoms():
 
 
 # if __name__ == '__main__':
-#     port = int(os.environ.get('PORT', 8080))
+#     port = int(os.environ.get('PORT', 8000))
 #     app.run(host='0.0.0.0', port=port)
