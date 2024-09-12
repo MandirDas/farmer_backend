@@ -20,10 +20,10 @@ CORS(app)
 
 genai.configure(api_key="GEMINI_API_KEY")
 model = genai.GenerativeModel('gemini-1.5-flash')
-MODEL_PLANT = tf.lite.Interpreter(model_path="/models/model_int8_optimized.tflite")
+MODEL_PLANT = tf.lite.Interpreter(model_path="models/model_int8_optimized.tflite")
 MODEL_PLANT.allocate_tensors()
 
-MODEL_ANIMAL = tf.lite.Interpreter(model_path="/models/livestock_optimized.tflite")
+MODEL_ANIMAL = tf.lite.Interpreter(model_path="models/livestock_optimized.tflite")
 MODEL_ANIMAL.allocate_tensors()
 # Get input and output tensors
 input_details_plant = MODEL_PLANT.get_input_details()
