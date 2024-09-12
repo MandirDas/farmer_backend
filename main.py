@@ -543,7 +543,7 @@ def predict():
             CLASS_NAMES = CLASS_NAMES_PLANT
         else:
             logger.info(f"Using Gemini for prediction of {name}")
-            result = analyze_image_for_disease(img_byte_arr, name_lower)
+            result = analyze_image_for_disease(img_byte_arr, name_lower,symptoms)
             logger.info(f"Gemini analysis result: {result}")
             return jsonify(result)
 
